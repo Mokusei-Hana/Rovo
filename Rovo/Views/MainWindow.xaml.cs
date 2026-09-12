@@ -12,6 +12,7 @@ public partial class MainWindow : Window
     private readonly MainViewModel viewModel;
     private readonly DispatcherTimer outputTimer;
     private bool waitingToClose;
+    private bool choosingFolder;
     private bool followOutput = true;
     private double outputVerticalOffset;
     private double outputHorizontalOffset;
@@ -33,23 +34,39 @@ public partial class MainWindow : Window
         };
     }
 
-    private void BrowseSource_Click(object sender, RoutedEventArgs e)
-    {
-        var selected = ChooseFolder("Choose source folder", viewModel.Source);
-        if (selected is not null) viewModel.Source = selected;
-    }
+    private async void BrowseSource_Click(object sender, RoutedEventArgs e) => await BrowseFolderAsync(isSource: true);
 
-    private void BrowseDestination_Click(object sender, RoutedEventArgs e)
-    {
-        var selected = ChooseFolder("Choose destination folder", viewModel.Destination);
-        if (selected is not null) viewModel.Destination = selected;
-    }
+    private async void BrowseDestination_Click(object sender, RoutedEventArgs e) => await BrowseFolderAsync(isSource: false);
 
-    private string? ChooseFolder(string title, string current)
+    private async Task BrowseFolderAsync(bool isSource)
     {
-        var dialog = new OpenFolderDialog { Title = title, Multiselect = false };
-        if (System.IO.Directory.Exists(current)) dialog.InitialDirectory = current;
-        return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
+        if (choosingFolder || !viewModel.IsIdle) return;
+        choosingFolder = true;
+        try
+        {
+            var current = isSource ? viewModel.Source : viewModel.Destination;
+            var exists = await Task.Run(() => System.IO.Directory.Exists(current));
+            // The window may have closed or a copy started while a network path was checked.
+            if (!IsLoaded || !viewModel.IsIdle) return;
+            var dialog = new OpenFolderDialog
+            {
+                Title = isSource ? "Choose source folder" : "Choose destination folder",
+                Multiselect = false
+            };
+            if (exists) dialog.InitialDirectory = current;
+            if (dialog.ShowDialog(this) != true) return;
+            if (isSource) viewModel.Source = dialog.FolderName;
+            else viewModel.Destination = dialog.FolderName;
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or Win32Exception or ArgumentException)
+        {
+            if (IsLoaded)
+                MessageBox.Show(this, $"Could not open the folder picker: {ex.Message}", "Choose folder", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            choosingFolder = false;
+        }
     }
 
     private async void Window_Closing(object? sender, CancelEventArgs e)

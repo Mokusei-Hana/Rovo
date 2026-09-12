@@ -28,6 +28,32 @@ jobs:
         run: dotnet build Rovo.slnx -c Release --no-restore
       - name: Test (real Robocopy integration runs on Windows)
         run: dotnet test Rovo.Tests/Rovo.Tests.csproj -c Release --no-build --logger "trx;LogFileName=results.trx" --results-directory TestResults
+      - name: WPF startup and idle-close smoke check
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $app = Start-Process -FilePath ./Rovo/bin/Release/net10.0-windows/Rovo.exe -PassThru
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(20)
+            do {
+              $app.Refresh()
+              if ($app.HasExited) { throw "Rovo exited before showing its window (exit $($app.ExitCode))." }
+              if ($app.MainWindowHandle -ne [IntPtr]::Zero) { break }
+              Start-Sleep -Milliseconds 200
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($app.MainWindowHandle -eq [IntPtr]::Zero -or $app.MainWindowTitle -ne 'Rovo') {
+              throw 'Rovo did not create its main window.'
+            }
+            if (-not $app.Responding) { throw 'The Rovo window is not responding.' }
+            if (-not $app.CloseMainWindow()) { throw 'Could not request a normal window close.' }
+            if (-not $app.WaitForExit(10000)) { throw 'Rovo did not close within 10 seconds.' }
+            if ($app.ExitCode -ne 0) { throw "Rovo exited with code $($app.ExitCode)." }
+            Write-Output 'Rovo created a responsive main window and closed normally.'
+          } finally {
+            $app.Refresh()
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+            $app.Dispose()
+          }
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4

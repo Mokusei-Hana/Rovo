@@ -32,7 +32,7 @@ The build is framework-dependent; running the built application requires the .NE
 
 The WPF project can be cross-built on Linux using its Windows targeting pack. UI-independent tests also run there; real Robocopy integration tests explicitly skip outside Windows. A cross-build does not verify WPF runtime behavior.
 
-GitHub Actions runs restore, Release build, and tests on both Ubuntu and Windows. Windows runs the real Robocopy tests, including locked-file failure, cancellation, and a subsequent copy. Test reports are attached to each run. See [VERIFICATION.md](VERIFICATION.md) for the review findings and validation evidence.
+GitHub Actions runs restore, Release build, and tests on both Ubuntu and Windows. Windows runs the real Robocopy tests, including locked-file failure, cancellation, and a subsequent copy, then checks that the WPF window starts, responds, and closes normally while idle. Test reports are attached to each run. See [VERIFICATION.md](VERIFICATION.md) for the review findings and validation evidence.
 
 ## Structure
 

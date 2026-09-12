@@ -12,6 +12,8 @@ now document the scope already present in README and the implementation.
 
 - Move filesystem validation and service startup off the WPF thread so unavailable
   UNC paths and synchronous process startup cannot freeze the window.
+- Check the folder picker's initial directory in the background too; handle native
+  picker errors and avoid opening a delayed picker after the window closes or a copy starts.
 - Keep the operation busy until validation/process shutdown finishes. Check
   cancellation before process validation and again before launch.
 - Replace the open-ended output drain with one bounded batch and constant-time
@@ -32,7 +34,16 @@ The current Work session is Linux and has no `dotnet` executable. Local
 installation endpoint was unreachable. Local build, tests, WPF startup, and
 Robocopy execution have not been claimed as successful.
 
-GitHub Actions results will be recorded after the branch is pushed and checked.
+The first [GitHub Actions run](https://github.com/Mokusei-Hana/Rovo/actions/runs/34679280783)
+verified commit `05bbbf2` with .NET SDK 10.0.401:
+
+| Environment | Restore | Release build | Tests |
+| --- | --- | --- | --- |
+| Windows | Passed | Passed, 0 warnings / 0 errors | 40 passed, 0 failed, 0 skipped |
+| Ubuntu | Passed | Passed, 0 warnings / 0 errors | 35 passed, 0 failed, 5 Windows-only tests skipped |
+
+Follow-up validation adds a real WPF process startup/idle-close smoke check and
+background folder-picker validation. Its result will be recorded once completed.
 
 ## Still requires interactive Windows verification
 
@@ -51,6 +62,7 @@ GitHub Actions results will be recorded after the branch is pushed and checked.
 5. Check Chinese/Japanese paths and output under the intended Windows OEM code
    page. Verify actual destination filenames separately from console rendering.
 
-Automated Windows Robocopy tests do not exercise the WPF window, visual DPI
-behavior, real UNC availability, or interactive close confirmation. No rollback,
+The WPF smoke check only covers startup, responsiveness, and idle close. Automated
+checks do not cover visual DPI behavior, real UNC availability, log interaction,
+or close confirmation while copying. No rollback,
 filesystem-alias resolution, or new Phase 2 features are included.
