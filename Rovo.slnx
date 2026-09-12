@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Rovo/Rovo.csproj" />
+  <Project Path="Rovo.Tests/Rovo.Tests.csproj" />
+</Solution>
