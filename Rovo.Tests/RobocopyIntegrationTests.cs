@@ -52,6 +52,42 @@ public sealed class RobocopyIntegrationTests
     }
 
     [WindowsFact]
+    public async Task LockedFileWithNoRetriesReportsFailureThenRecovers()
+    {
+        using var folders = new TestFolders();
+        var lockedPath = Path.Combine(folders.Source, "locked.txt");
+        File.WriteAllText(lockedPath, "locked content");
+        var service = new RobocopyService();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using (var locked = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var output = new CollectedOutput();
+            var result = await service.RunAsync(new(folders.Source, folders.Destination, Retries: 0, RetryDelaySeconds: 0),
+                output, timeout.Token);
+            Assert.Equal(CopyOutcome.Failed, result.Outcome);
+            Assert.True(result.ExitCode >= 8);
+            Assert.NotEmpty(output.Lines);
+        }
+        var next = await service.RunAsync(new(folders.Source, folders.Destination), new CollectedOutput(), timeout.Token);
+        Assert.True(next.ExitCode is >= 0 and < 8);
+        Assert.Equal("locked content", File.ReadAllText(Path.Combine(folders.Destination, "locked.txt")));
+    }
+
+    [WindowsFact]
+    public async Task PreCanceledRequestDoesNotCreateDestination()
+    {
+        using var folders = new TestFolders();
+        File.WriteAllText(Path.Combine(folders.Source, "file.txt"), "content");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var output = new CollectedOutput();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new RobocopyService().RunAsync(
+            new(folders.Source, folders.Destination), output, cancellation.Token));
+        Assert.False(Directory.Exists(folders.Destination));
+        Assert.Empty(output.Lines);
+    }
+
+    [WindowsFact]
     public async Task CanCancelDuringRetryThenRunAgain()
     {
         using var folders = new TestFolders();

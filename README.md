@@ -11,6 +11,7 @@ Choose source and destination folders, select subfolder handling, set retries, a
 - Junctions are excluded with `/XJ`. `/NP` suppresses per-file percentages; the UI shows indeterminate activity.
 - Normal Robocopy output is decoded using the Windows OEM code page. Rovo does not force `/UNICODE`; characters outside that code page may not display faithfully even though Unicode paths are passed intact.
 - Exit codes 0–1 indicate completion, 2–7 indicate differences to review, and 8 or above indicate failure. Output for the latest run is limited to 10,000 lines.
+- Older output omitted by the limit is counted below the log. Scroll back or select text to inspect it; automatic scrolling resumes when you return to the bottom with no selection. Lines that age out of the limit cannot be preserved.
 - Source and destination must be absolute local or UNC paths. The source must exist; Robocopy can create the destination.
 - Rovo rejects equal or nested paths as an application safety restriction, not a Robocopy limitation. This check compares normalized paths; it does not resolve filesystem aliases or mapped drives.
 
@@ -31,9 +32,13 @@ The build is framework-dependent; running the built application requires the .NE
 
 The WPF project can be cross-built on Linux using its Windows targeting pack. UI-independent tests also run there; real Robocopy integration tests explicitly skip outside Windows. A cross-build does not verify WPF runtime behavior.
 
+GitHub Actions runs restore, Release build, and tests on both Ubuntu and Windows. Windows runs the real Robocopy tests, including locked-file failure, cancellation, and a subsequent copy. Test reports are attached to each run. See [VERIFICATION.md](VERIFICATION.md) for the review findings and validation evidence.
+
 ## Structure
 
 One application project contains Models, Services, ViewModels, and Views. `App` directly constructs the service, view model, and window. The view owns folder dialogs, close confirmation, and a timer that flushes buffered output. The service owns the Robocopy process and drains both output streams asynchronously.
+
+Folder validation and service startup run off the UI thread. During an unavailable network-folder check, Cancel requests cancellation and keeps controls busy until that operating-system call returns; no copy is started afterward. Output producers share a bounded queue and each UI refresh consumes one finite snapshot.
 
 The test project links the application's UI-independent source files so it can test the actual logic on Linux without an extra production library. It includes Windows-only tests that run real copies in isolated temporary folders.
 

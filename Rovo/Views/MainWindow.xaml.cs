@@ -12,15 +12,25 @@ public partial class MainWindow : Window
     private readonly MainViewModel viewModel;
     private readonly DispatcherTimer outputTimer;
     private bool waitingToClose;
+    private bool followOutput = true;
+    private double outputVerticalOffset;
+    private double outputHorizontalOffset;
+    private int outputSelectionStart;
+    private int outputSelectionLength;
 
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
         this.viewModel = viewModel;
         DataContext = viewModel;
+        viewModel.PropertyChanging += ViewModel_PropertyChanging;
         outputTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(150), DispatcherPriority.Background,
             (_, _) => viewModel.DrainOutput(), Dispatcher);
-        Closed += (_, _) => outputTimer.Stop();
+        Closed += (_, _) =>
+        {
+            outputTimer.Stop();
+            viewModel.PropertyChanging -= ViewModel_PropertyChanging;
+        };
     }
 
     private void BrowseSource_Click(object sender, RoutedEventArgs e)
@@ -60,10 +70,37 @@ public partial class MainWindow : Window
         Close();
     }
 
+    private void ViewModel_PropertyChanging(object? sender, PropertyChangingEventArgs e)
+    {
+        if (e.PropertyName != nameof(MainViewModel.Output)) return;
+        // Read the old viewport before WPF replaces the bound text, not in TextChanged.
+        followOutput = OutputBox.SelectionLength == 0 &&
+            OutputBox.VerticalOffset >= OutputBox.ExtentHeight - OutputBox.ViewportHeight - 1;
+        outputVerticalOffset = OutputBox.VerticalOffset;
+        outputHorizontalOffset = OutputBox.HorizontalOffset;
+        outputSelectionStart = OutputBox.SelectionStart;
+        outputSelectionLength = OutputBox.SelectionLength;
+    }
+
     private void OutputBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        // Preserve the user's position when they scroll back to inspect earlier output.
-        if (OutputBox.SelectionLength == 0 && OutputBox.VerticalOffset >= OutputBox.ExtentHeight - OutputBox.ViewportHeight - 40)
-            OutputBox.ScrollToEnd();
+        var follow = followOutput;
+        var vertical = outputVerticalOffset;
+        var horizontal = outputHorizontalOffset;
+        var start = outputSelectionStart;
+        var length = outputSelectionLength;
+        // Scroll after layout has updated the extent for the new text.
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (follow)
+                OutputBox.ScrollToEnd();
+            else
+            {
+                start = Math.Min(start, OutputBox.Text.Length);
+                OutputBox.Select(start, Math.Min(length, OutputBox.Text.Length - start));
+                OutputBox.ScrollToVerticalOffset(vertical);
+            }
+            OutputBox.ScrollToHorizontalOffset(horizontal);
+        }, DispatcherPriority.Loaded);
     }
 }

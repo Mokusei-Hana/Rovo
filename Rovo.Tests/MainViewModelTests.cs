@@ -34,14 +34,17 @@ public sealed class MainViewModelTests
     {
         using var folders = new TestFolders();
         var calls = 0;
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = new FakeService(async (_, _, token) =>
         {
             calls++;
+            started.TrySetResult();
             if (calls == 1) await Task.Delay(Timeout.Infinite, token);
             return CopyResult.FromExitCode(1);
         });
         var vm = Create(service, folders);
         var running = vm.StartCommand.ExecuteAsync(null);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(vm.IsRunning);
         Assert.False(vm.StartCommand.CanExecute(null));
         // Even a direct programmatic duplicate invocation must not start a second process.
@@ -100,8 +103,104 @@ public sealed class MainViewModelTests
         Assert.Equal(10_000, lines.Length);
         Assert.Equal("line 5000", lines[0]);
         Assert.Equal("line 14999", lines[^1]);
+        Assert.Contains("older lines omitted", vm.OutputSummary);
         await vm.StartCommand.ExecuteAsync(null);
         Assert.Equal("next run", vm.Output);
+        Assert.DoesNotContain("omitted", vm.OutputSummary);
+    }
+
+    [Fact]
+    public async Task CancelKeepsControlsBusyUntilServiceActuallyStops()
+    {
+        using var folders = new TestFolders();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource<CopyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken capturedToken = default;
+        var vm = Create(new FakeService((_, output, token) =>
+        {
+            capturedToken = token;
+            output.Report("copy started");
+            started.SetResult();
+            return stopped.Task;
+        }), folders);
+        var run = vm.StartCommand.ExecuteAsync(null);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            vm.CancelCommand.Execute(null);
+            Assert.True(capturedToken.IsCancellationRequested);
+            Assert.True(vm.IsRunning);
+            Assert.True(vm.IsCancelling);
+            Assert.False(vm.StartCommand.CanExecute(null));
+            Assert.False(vm.CancelCommand.CanExecute(null));
+            Assert.False(run.IsCompleted);
+        }
+        finally
+        {
+            stopped.TrySetResult(new CopyResult(1, CopyOutcome.Canceled));
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.True(vm.IsIdle);
+        Assert.False(vm.IsCancelling);
+        Assert.Contains("interrupted file may be incomplete", vm.Status);
+        Assert.Equal("copy started", vm.Output);
+    }
+
+    [Fact]
+    public async Task InvalidFoldersKeepPreviousOutputAndRecoverForNextRun()
+    {
+        using var folders = new TestFolders();
+        var calls = 0;
+        var vm = Create(new FakeService((_, output, _) =>
+        {
+            calls++;
+            output.Report("previous output");
+            return Task.FromResult(CopyResult.FromExitCode(1));
+        }), folders);
+        await vm.StartCommand.ExecuteAsync(null);
+        vm.Destination = folders.Source;
+        await vm.StartCommand.ExecuteAsync(null);
+        Assert.NotNull(vm.ValidationError);
+        Assert.True(vm.IsIdle);
+        Assert.Equal(1, calls);
+        Assert.Equal("previous output", vm.Output);
+        vm.Destination = folders.Destination;
+        await vm.StartCommand.ExecuteAsync(null);
+        Assert.Null(vm.ValidationError);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task OutputLimitAlsoAppliesAcrossMultipleUiFlushes()
+    {
+        using var folders = new TestFolders();
+        var firstBatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continueOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = Create(new FakeService(async (_, output, _) =>
+        {
+            for (var i = 0; i < 8_000; i++) output.Report($"line {i}");
+            firstBatch.SetResult();
+            await continueOutput.Task;
+            for (var i = 8_000; i < 16_000; i++) output.Report($"line {i}");
+            return CopyResult.FromExitCode(1);
+        }), folders);
+        var run = vm.StartCommand.ExecuteAsync(null);
+        await firstBatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            vm.DrainOutput();
+            Assert.Equal(8_000, vm.Output.Split(Environment.NewLine).Length);
+        }
+        finally
+        {
+            continueOutput.TrySetResult();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        var lines = vm.Output.Split(Environment.NewLine);
+        Assert.Equal(10_000, lines.Length);
+        Assert.Equal("line 6000", lines[0]);
+        Assert.Equal("line 15999", lines[^1]);
+        Assert.Contains($"{6_000:N0} older lines omitted", vm.OutputSummary);
     }
 
     private static MainViewModel Create(IRobocopyService service, TestFolders folders) => new(service)

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Rovo.Models;
@@ -9,8 +9,10 @@ namespace Rovo.ViewModels;
 public partial class MainViewModel(IRobocopyService service) : ObservableObject
 {
     private const int OutputLimit = 10_000;
-    private readonly ConcurrentQueue<string> pendingOutput = new();
+    private readonly object outputLock = new();
+    private readonly Queue<string> pendingOutput = new();
     private readonly Queue<string> visibleOutput = new();
+    private long droppedLines;
     private CancellationTokenSource? runCancellation;
 
     [ObservableProperty] private string source = "";
@@ -21,6 +23,7 @@ public partial class MainViewModel(IRobocopyService service) : ObservableObject
     [ObservableProperty] private string status = "Choose folders to get started.";
     [ObservableProperty] private string output = "";
     [ObservableProperty] private string? validationError;
+    [ObservableProperty] private string outputSummary = "Latest run · up to 10,000 lines";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsIdle))]
@@ -49,22 +52,36 @@ public partial class MainViewModel(IRobocopyService service) : ObservableObject
         }
 
         var request = new CopyRequest(Source.Trim(), Destination.Trim(), Subfolders, retryCount, delay);
-        ValidationError = CopyRequestValidator.Validate(request);
-        if (ValidationError is not null) return;
-
-        // Snapshot normalized paths and options before starting background work.
-        request = request with { Source = Path.GetFullPath(request.Source), Destination = Path.GetFullPath(request.Destination) };
-        pendingOutput.Clear();
-        visibleOutput.Clear();
-        Output = "";
         IsRunning = true;
         IsCancelling = false;
-        Status = "Copying…";
+        Status = "Checking folders…";
         using var cancellation = new CancellationTokenSource();
         runCancellation = cancellation;
         try
         {
-            var result = await service.RunAsync(request, new OutputProgress(QueueOutput), cancellation.Token);
+            // Directory.Exists can block on unavailable UNC paths. Keep the UI responsive,
+            // but retain ownership until validation finishes: cancel must never launch a copy later.
+            var error = await Task.Run(() => CopyRequestValidator.Validate(request), cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (error is not null)
+            {
+                ValidationError = error;
+                Status = "Check the folder paths and try again.";
+                return;
+            }
+
+            request = request with { Source = Path.GetFullPath(request.Source), Destination = Path.GetFullPath(request.Destination) };
+            lock (outputLock)
+            {
+                pendingOutput.Clear();
+                droppedLines = 0;
+            }
+            visibleOutput.Clear();
+            Output = "";
+            OutputSummary = "Latest run · up to 10,000 lines";
+            Status = "Copying…";
+            // Service validation and Process.Start also perform synchronous operating-system work.
+            var result = await Task.Run(() => service.RunAsync(request, new OutputProgress(QueueOutput), cancellation.Token), cancellation.Token);
             Status = result.Outcome switch
             {
                 CopyOutcome.Completed => result.ExitCode == 0 ? "Completed — no files needed copying." : "Copy completed.",
@@ -98,28 +115,54 @@ public partial class MainViewModel(IRobocopyService service) : ObservableObject
     {
         if (!CanCancel()) return;
         IsCancelling = true;
-        Status = "Canceling — waiting for Robocopy to stop…";
+        Status = "Canceling — waiting for the current operation to stop…";
         runCancellation?.Cancel();
     }
 
     private void QueueOutput(string line)
     {
-        pendingOutput.Enqueue(line);
-        while (pendingOutput.Count > OutputLimit)
-            pendingOutput.TryDequeue(out _);
+        lock (outputLock)
+        {
+            pendingOutput.Enqueue(line);
+            if (pendingOutput.Count > OutputLimit)
+            {
+                pendingOutput.Dequeue();
+                droppedLines++;
+            }
+        }
     }
 
     // Called on the UI thread by the view timer; producer threads never touch bindings.
     public void DrainOutput()
     {
-        var changed = false;
-        while (pendingOutput.TryDequeue(out var line))
+        string[] batch;
+        var removed = 0;
+        lock (outputLock)
+        {
+            if (pendingOutput.Count == 0) return;
+            // Take one bounded snapshot; continuous producers cannot keep the UI in this loop.
+            batch = pendingOutput.ToArray();
+            pendingOutput.Clear();
+        }
+        foreach (var line in batch)
         {
             visibleOutput.Enqueue(line);
-            if (visibleOutput.Count > OutputLimit) visibleOutput.Dequeue();
-            changed = true;
+            if (visibleOutput.Count > OutputLimit)
+            {
+                visibleOutput.Dequeue();
+                removed++;
+            }
         }
-        if (changed) Output = string.Join(Environment.NewLine, visibleOutput);
+        long dropped;
+        lock (outputLock)
+        {
+            droppedLines += removed;
+            dropped = droppedLines;
+        }
+        Output = string.Join(Environment.NewLine, visibleOutput);
+        OutputSummary = dropped == 0
+            ? $"Latest run · {visibleOutput.Count:N0} lines"
+            : $"Latest {visibleOutput.Count:N0} lines · {dropped:N0} older lines omitted";
     }
 
     private sealed class OutputProgress(Action<string> report) : IProgress<string>

@@ -10,11 +10,18 @@
             <Setter Property="FontSize" Value="14" />
             <Setter Property="Foreground" Value="{StaticResource Ink}" />
             <Setter Property="Background" Value="#F5F7F8" />
+            <Setter Property="UseLayoutRounding" Value="True" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
         </Style>
         <Style TargetType="TextBox">
             <Setter Property="Padding" Value="10,8" />
             <Setter Property="BorderBrush" Value="#A7B5BE" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+                </Trigger>
+            </Style.Triggers>
         </Style>
         <Style TargetType="Button">
             <Setter Property="Padding" Value="18,9" />

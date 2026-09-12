@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using Rovo.Models;
@@ -12,6 +13,7 @@ public sealed class RobocopyService : IRobocopyService
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Robocopy requires Windows.");
+        cancellationToken.ThrowIfCancellationRequested();
         var validationError = CopyRequestValidator.Validate(request);
         if (validationError is not null)
             throw new ArgumentException(validationError, nameof(request));
